@@ -93,5 +93,32 @@ window.BUNDLED_ROUTES = [
         points: [[0, 1152, "第一登山口"], [2.6, 1764, "油羅山"]]
       }
     ]
+  },
+  {
+    // 各合目的海拔為官方數字；合目之間的里程是用全程 7.5 km 依標準步行時間分配估出來的
+    id: "fuji",
+    name: "富士山 吉田路線",
+    approx: true,
+    days: [
+      {
+        name: "富士スバルライン五合目 → 吉田口頂上",
+        points: [[0, 2300, "五合目"], [1.7, 2390, "六合目"], [2.7, 2700, "七合目"], [4.4, 3100, "八合目"], [6.0, 3370, "本八合目"], [6.8, 3580, "九合目"], [7.5, 3710, "吉田口頂上"]]
+      }
+    ]
+  },
+  {
+    id: "kinabalu",
+    name: "神山（京那巴魯山）",
+    approx: true,
+    days: [
+      {
+        name: "D1 Timpohon Gate → Laban Rata",
+        points: [[0, 1866, "Timpohon Gate"], [0.79, 1982, "Pondok Kandis"], [1.23, 2081, "Pondok Ubah"], [1.98, 2267, "Pondok Lowii"], [2.9, 2515, "Pondok Mempening"], [3.85, 2702, "Layang-Layang"], [4.79, 2961, "Pondok Villosa"], [5.2, 3080, "Pondok Paka"], [6.0, 3272, "Laban Rata"]]
+      },
+      {
+        name: "D2 Laban Rata → Low's Peak",
+        points: [[0, 3272, "Laban Rata"], [1.0, 3668, "Sayat-Sayat"], [2.72, 4095, "Low's Peak"]]
+      }
+    ]
   }
 ];

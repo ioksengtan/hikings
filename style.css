@@ -92,6 +92,7 @@ aside, section {
 #chart .axis { stroke: var(--line); }
 #chart .series { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
 #chart .mark { fill: var(--panel); stroke-width: 2; }
+#chart .label { fill: var(--text); font-size: 13px; font-weight: 600; stroke: var(--panel); stroke-width: 4; paint-order: stroke; stroke-linejoin: round; pointer-events: none; }
 #chart .cursor { stroke: var(--muted); stroke-dasharray: 3 3; }
 #empty {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;

@@ -277,11 +277,9 @@
     series.forEach((s) => {
       const d = s.plot.map(([x, y], i) => (i ? 'L' : 'M') + sx(x).toFixed(1) + ' ' + sy(y).toFixed(1)).join('');
       chart.append(svg('path', { class: 'series', d, stroke: s.color }));
-      // 有名稱的點是地標，滑鼠停在圓點上會顯示名稱
-      s.plot.filter((p) => p[2]).forEach(([x, y, name]) => {
-        const dot = svg('circle', { class: 'mark', cx: sx(x), cy: sy(y), r: 3.5, stroke: s.color });
-        dot.append(svg('title', {}, name + '（' + fmt(x, 1) + ' km）'));
-        chart.append(dot);
+      // 有名稱的點是地標，游標經過時會把名稱標在圖上
+      s.plot.filter((p) => p[2]).forEach(([x, y]) => {
+        chart.append(svg('circle', { class: 'mark', cx: sx(x), cy: sy(y), r: 3.5, stroke: s.color }));
       });
     });
 
@@ -289,13 +287,15 @@
     cursor.append(svg('line', { class: 'cursor', y1: m.t, y2: H - m.b }));
     series.forEach((s) => cursor.append(svg('circle', { r: 4, fill: s.color })));
     chart.append(cursor);
+    const labels = svg('g', {});
+    chart.append(labels);
 
-    plotted = { series, sx, sy, xMax, m, W, cursor, rel };
+    plotted = { series, sx, sy, xMax, m, W, cursor, labels, rel };
   }
 
   function onHover(ev) {
     if (!plotted) return;
-    const { series, sx, sy, xMax, m, W, cursor, rel } = plotted;
+    const { series, sx, sy, xMax, m, W, cursor, labels, rel } = plotted;
     const rect = $('chart').getBoundingClientRect();
     const px = (ev.clientX - rect.left) * W / rect.width;
     const km = Math.min(Math.max((px - m.l) / (W - m.l - m.r) * xMax, 0), xMax);
@@ -318,11 +318,29 @@
     cursor.setAttribute('visibility', 'visible');
     tip.hidden = false;
     const x = sx(km) * rect.width / W;
-    tip.style.left = (x + tip.offsetWidth + 16 > rect.width ? x - tip.offsetWidth - 12 : x + 12) + 'px';
+    const tipOnRight = x + tip.offsetWidth + 16 <= rect.width;
+    tip.style.left = (tipOnRight ? x + 12 : x - tip.offsetWidth - 12) + 'px';
+
+    // 游標靠近地標（左右 10px 內）時標出名稱；放在提示框的另一側，並上下錯開避免重疊
+    labels.replaceChildren();
+    const found = [];
+    series.forEach((s) => {
+      const near = s.plot.filter((p) => p[2] && Math.abs(sx(p[0]) - sx(km)) <= 10)
+        .sort((p, q) => Math.abs(p[0] - km) - Math.abs(q[0] - km))[0];
+      if (near) found.push({ x: sx(near[0]), y: sy(near[1]) + 4, name: near[2] });
+    });
+    found.sort((p, q) => p.y - q.y).forEach((f, i) => {
+      if (i && f.y < found[i - 1].y + 17) f.y = found[i - 1].y + 17;
+      const width = f.name.length * 13 + 8;
+      let lx = tipOnRight ? f.x - 9 : f.x + 9, anchor = tipOnRight ? 'end' : 'start', dy = 0;
+      if (tipOnRight && lx - width < 0) { lx = 2; anchor = 'start'; dy = -16; }
+      if (!tipOnRight && lx + width > W) { lx = W - 2; anchor = 'end'; dy = -16; }
+      labels.append(svg('text', { class: 'label', x: lx, y: f.y + dy, 'text-anchor': anchor }, f.name));
+    });
   }
 
   function hideCursor() {
-    if (plotted) plotted.cursor.setAttribute('visibility', 'hidden');
+    if (plotted) { plotted.cursor.setAttribute('visibility', 'hidden'); plotted.labels.replaceChildren(); }
     $('tooltip').hidden = true;
   }
 
