@@ -10,10 +10,12 @@
   const saved = load();
   const state = {
     user: saved.user || [],        // 使用者匯入的路線（存在 localStorage）
-    selected: saved.selected || {}, // key -> { from, to }，key = routeId|dayIndex
+    selected: saved.selected || {}, // key -> { from, to }，key = routeId|dayIndex 或 routeId|p:節點>節點
+    paths: saved.paths || {},       // routeId -> [{ via: [節點名稱, ...] }]，使用者自訂的起終點
     yMode: saved.yMode || 'abs'
   };
   let plotted = null; // 目前畫在圖上的資料，給滑鼠游標用
+  let builder = null; // 正在編輯的自訂起終點 { routeId, via }
 
   function load() {
     try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
@@ -149,10 +151,82 @@
     return { dist: points[points.length - 1][0], gain, loss, min, max };
   }
 
+  // ---------- 路線圖（graph） ----------
+  // 有名稱的點是節點；同一段裡相鄰兩個節點之間的剖面是一條邊，正反向都能走。
+  // 不同段落裡同名的節點視為同一個點，所以 D1、D2 會在山屋接起來。
+
+  function graphOf(route) {
+    const adj = new Map(); // 節點名稱 -> [{ to, points, dist }]
+    const link = (a, b, points) => adj.get(a).push({ to: b, points, dist: points[points.length - 1][0] });
+    route.days.forEach((day) => {
+      let last = -1;
+      day.points.forEach((p, j) => {
+        if (!p[2]) return;
+        if (!adj.has(p[2])) adj.set(p[2], []);
+        if (last >= 0 && day.points[last][2] !== p[2]) {
+          const part = day.points.slice(last, j + 1), x0 = part[0][0], x1 = p[0];
+          link(part[0][2], p[2], part.map(([x, y, n]) => [+(x - x0).toFixed(3), y, n]));
+          link(p[2], part[0][2], part.map(([x, y, n]) => [+(x1 - x).toFixed(3), y, n]).reverse());
+        }
+        last = j;
+      });
+    });
+    return adj;
+  }
+
+  // 兩個節點之間里程最短的走法（Dijkstra），回傳依序經過的邊；走不到回傳 null
+  function shortest(adj, a, b) {
+    const best = new Map([[a, { dist: 0, edges: [] }]]), done = new Set();
+    for (;;) {
+      let cur = null;
+      for (const [n, v] of best) if (!done.has(n) && (cur == null || v.dist < best.get(cur).dist)) cur = n;
+      if (cur == null) return null;
+      if (cur === b) return best.get(cur).edges;
+      done.add(cur);
+      for (const e of adj.get(cur) || []) {
+        const dist = best.get(cur).dist + e.dist;
+        if (!best.has(e.to) || dist < best.get(e.to).dist) best.set(e.to, { dist, edges: best.get(cur).edges.concat(e) });
+      }
+    }
+  }
+  const reachable = (adj, a) => [...adj.keys()].filter((n) => shortest(adj, a, n));
+
+  // 依 via 的順序把各段接成一條剖面
+  function pathPoints(adj, via) {
+    const out = [];
+    let offset = 0;
+    for (let i = 1; i < via.length; i++) {
+      const edges = shortest(adj, via[i - 1], via[i]);
+      if (!edges || !edges.length) return null;
+      for (const e of edges) {
+        e.points.forEach((p, j) => { if (j || !out.length) out.push([+(p[0] + offset).toFixed(3), p[1], p[2]]); });
+        offset += e.dist;
+      }
+    }
+    return out.length > 1 ? out : null;
+  }
+
+  const pathKey = (route, via) => keyOf(route.id, 'p:' + via.join('>'));
+
+  // 一條路線可勾選的所有段落：原本的每一天，加上內建與自訂的起終點
+  function segmentsOf(route) {
+    const segs = route.days.map((day, i) => ({ key: keyOf(route.id, i), name: day.name, points: day.points, day }));
+    const adj = graphOf(route), seen = new Set();
+    const add = (path, custom) => {
+      const key = pathKey(route, path.via), points = pathPoints(adj, path.via);
+      if (!points || seen.has(key)) return;
+      seen.add(key);
+      segs.push({ key, name: path.name || path.via.join(' → '), points, path: custom ? path : null });
+    };
+    (route.paths || []).forEach((p) => add(p, false));
+    (state.paths[route.id] || []).forEach((p) => add(p, true));
+    return segs;
+  }
+
   function buildSeries() {
     const series = [];
-    allRoutes().forEach((route) => route.days.forEach((day, i) => {
-      const key = keyOf(route.id, i);
+    allRoutes().forEach((route) => segmentsOf(route).forEach((day) => {
+      const key = day.key;
       const sel = state.selected[key];
       if (!sel || day.points.length < 2) return;
       const total = day.points[day.points.length - 1][0];
@@ -195,23 +269,81 @@
         );
       }
       const box = el('div', { className: 'route' }, title);
-      route.days.forEach((day, i) => {
-        const key = keyOf(route.id, i);
+      segmentsOf(route).forEach((seg) => {
+        const key = seg.key;
         const check = el('input', { type: 'checkbox', checked: !!state.selected[key] });
         check.onchange = () => {
           if (check.checked) state.selected[key] = {}; else delete state.selected[key];
           save(); renderChart();
         };
-        const s = stats(day.points);
+        const s = stats(seg.points);
         const row = el('div', { className: 'day' },
-          el('label', {}, check, el('span', { textContent: day.name }),
+          el('label', {}, check, el('span', { textContent: seg.name }),
             el('small', { textContent: fmt(s.dist, 1) + ' km ↑' + fmt(s.gain) }))
         );
-        if (isUser) row.append(el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: () => rename(day) }));
+        if (isUser && seg.day) row.append(el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: () => rename(seg.day) }));
+        if (seg.path) row.append(el('button', { className: 'icon', title: '刪除', textContent: '✕', onclick: () => removePath(route, seg) }));
         box.append(row);
       });
+      if (builder && builder.routeId === route.id) box.append(renderBuilder(route));
+      else if (graphOf(route).size > 1) box.append(el('button', { className: 'link', textContent: '＋ 自訂起終點', onclick: () => openBuilder(route) }));
       list.append(box);
     });
+  }
+
+  function openBuilder(route) {
+    const adj = graphOf(route), start = adj.keys().next().value, reach = reachable(adj, start);
+    builder = { routeId: route.id, via: [start, reach[reach.length - 1]] };
+    renderList();
+  }
+
+  function renderBuilder(route) {
+    const adj = graphOf(route), via = builder.via, reach = reachable(adj, via[0]);
+    const box = el('div', { className: 'builder' });
+    via.forEach((name, i) => {
+      const last = i === via.length - 1;
+      const select = el('select', {}, ...(i ? reach : [...adj.keys()]).map((n) => el('option', { value: n, textContent: n, selected: n === name })));
+      select.onchange = () => {
+        via[i] = select.value;
+        if (!i) { // 換了起點，把走不到的站換掉
+          const r = reachable(adj, via[0]);
+          builder.via = via.map((n) => (r.includes(n) ? n : r[r.length - 1]));
+        }
+        renderList();
+      };
+      const row = el('div', { className: 'stop' }, el('span', { textContent: !i ? '起點' : last ? '終點' : '經過' }), select);
+      if (i && !last) row.append(el('button', { className: 'icon', title: '移除', textContent: '✕', onclick: () => { via.splice(i, 1); renderList(); } }));
+      box.append(row);
+    });
+    const points = pathPoints(adj, via), s = points && stats(points);
+    const addStop = () => {
+      const prev = via[via.length - 2], end = via[via.length - 1];
+      via.splice(via.length - 1, 0, reach.find((n) => n !== prev && n !== end) || end);
+      renderList();
+    };
+    box.append(
+      el('div', { className: 'hint', textContent: s ? fmt(s.dist, 1) + ' km ↑' + fmt(s.gain) + ' ↓' + fmt(s.loss) : '相鄰的兩站不能相同' }),
+      el('div', { className: 'builder-actions' },
+        el('button', { className: 'btn', textContent: '＋ 經過點', onclick: addStop }),
+        el('button', { className: 'btn primary', textContent: '加入', disabled: !points, onclick: () => addPath(route) }),
+        el('button', { className: 'btn', textContent: '取消', onclick: () => { builder = null; renderList(); } }))
+    );
+    return box;
+  }
+
+  function addPath(route) {
+    const via = builder.via.slice(), key = pathKey(route, via);
+    const list = state.paths[route.id] || (state.paths[route.id] = []);
+    if (!segmentsOf(route).some((seg) => seg.key === key)) list.push({ via });
+    state.selected[key] = state.selected[key] || {};
+    builder = null;
+    save(); render();
+  }
+
+  function removePath(route, seg) {
+    state.paths[route.id] = state.paths[route.id].filter((p) => p !== seg.path);
+    delete state.selected[seg.key];
+    save(); render();
   }
 
   function rename(item) {
@@ -223,6 +355,7 @@
     if (!confirm('刪除「' + route.name + '」？')) return;
     state.user = state.user.filter((r) => r !== route);
     Object.keys(state.selected).forEach((k) => { if (k.startsWith(route.id + '|')) delete state.selected[k]; });
+    delete state.paths[route.id];
     save(); render();
   }
 
@@ -386,7 +519,10 @@
   }
 
   $('exportBtn').onclick = () => {
-    const routes = allRoutes();
+    const routes = allRoutes().map((r) => {
+      const paths = (r.paths || []).concat(state.paths[r.id] || []);
+      return paths.length ? { ...r, paths } : r;
+    });
     const js = '// 網站內建路線。points 為 [累積里程 km, 海拔 m, 地標名稱(可省略)]。\nwindow.BUNDLED_ROUTES = ' + JSON.stringify(routes) + ';\n';
     const a = el('a', { href: URL.createObjectURL(new Blob([js], { type: 'text/javascript' })), download: 'routes.js' });
     a.click();

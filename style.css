@@ -80,6 +80,19 @@ aside, section {
 .day .icon { visibility: hidden; }
 .day:hover .icon { visibility: visible; }
 
+.link { border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; padding: 4px 4px 0; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.builder { margin-top: 6px; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; }
+.stop { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 13px; color: var(--muted); }
+.stop span { flex: none; width: 2.2em; }
+.stop select {
+  flex: 1; min-width: 0; padding: 3px 4px; font: inherit; font-size: 13.5px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+}
+.builder .hint { margin: 2px 0 8px; }
+.builder-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn:disabled { opacity: .5; cursor: default; }
+
 .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 13.5px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; padding: 4px 12px; cursor: pointer; }
