@@ -16,6 +16,7 @@
   };
   let plotted = null; // 目前畫在圖上的資料，給滑鼠游標用
   let builder = null; // 正在編輯的自訂起終點 { routeId, via }
+  const openRoutes = new Set(); // 清單中展開的路線 id
 
   function load() {
     try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
@@ -108,6 +109,7 @@
       try {
         const route = parseGpx(await file.text(), file.name);
         state.user.push(route);
+        openRoutes.add(route.id);
         route.days.forEach((_, i) => { state.selected[keyOf(route.id, i)] = {}; });
       } catch (e) {
         errors.push(file.name + '：' + e.message);
@@ -267,16 +269,24 @@
     list.replaceChildren();
     allRoutes().forEach((route) => {
       const isUser = state.user.includes(route);
-      const title = el('div', { className: 'route-title' }, el('span', { textContent: route.name }));
+      const segs = segmentsOf(route);
+      const open = openRoutes.has(route.id);
+      const picked = segs.filter((seg) => state.selected[seg.key]).length;
+      const title = el('div', { className: 'route-title' },
+        el('i', { className: 'caret', textContent: open ? '▾' : '▸' }), el('span', { textContent: route.name }));
+      title.onclick = () => { if (open) openRoutes.delete(route.id); else openRoutes.add(route.id); renderList(); };
+      if (!open && picked) title.append(el('em', { className: 'badge on', textContent: '已選 ' + picked }));
       if (route.approx) title.append(el('em', { className: 'badge', textContent: '概略', title: '以地標的里程與海拔連成，非實測軌跡' }));
       if (isUser) {
         title.append(
-          el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: () => rename(route) }),
-          el('button', { className: 'icon', title: '刪除', textContent: '✕', onclick: () => removeRoute(route) })
+          el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: (e) => { e.stopPropagation(); rename(route); } }),
+          el('button', { className: 'icon', title: '刪除', textContent: '✕', onclick: (e) => { e.stopPropagation(); removeRoute(route); } })
         );
       }
       const box = el('div', { className: 'route' }, title);
-      segmentsOf(route).forEach((seg) => {
+      list.append(box);
+      if (!open) return;
+      segs.forEach((seg) => {
         const key = seg.key;
         const check = el('input', { type: 'checkbox', checked: !!state.selected[key] });
         check.onchange = () => {
@@ -294,7 +304,6 @@
       });
       if (builder && builder.routeId === route.id) box.append(renderBuilder(route));
       else if (graphOf(route).size > 1) box.append(el('button', { className: 'link', textContent: '＋ 自訂起終點', onclick: () => openBuilder(route) }));
-      list.append(box);
     });
   }
 
@@ -389,7 +398,7 @@
     if (!series.length) return;
 
     const W = chart.clientWidth || 800, H = chart.clientHeight || 420;
-    const m = { l: 56, r: 16, t: 14, b: 38 };
+    const m = { l: 56, r: 16, t: 28, b: 38 };
     chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
     const xMax = Math.max(...series.map((s) => s.stats.dist));
@@ -412,7 +421,7 @@
     }
     chart.append(svg('line', { class: 'axis', x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }));
     chart.append(svg('text', { x: W - m.r, y: H - 6, 'text-anchor': 'end' }, '里程 (km)'));
-    chart.append(svg('text', { x: 4, y: m.t + 2, 'dominant-baseline': 'hanging' }, rel ? '相對起點 (m)' : '海拔 (m)'));
+    chart.append(svg('text', { x: 4, y: 4, 'dominant-baseline': 'hanging' }, rel ? '相對起點 (m)' : '海拔 (m)'));
 
     series.forEach((s) => {
       const d = s.plot.map(([x, y], i) => (i ? 'L' : 'M') + sx(x).toFixed(1) + ' ' + sy(y).toFixed(1)).join('');
@@ -453,7 +462,7 @@
       dot.setAttribute('cx', sx(km)); dot.setAttribute('cy', sy(v));
       const sw = el('span', { className: 'sw' });
       sw.style.background = s.color;
-      tip.append(el('div', {}, sw, s.label + '：' + (rel && v > 0 ? '+' : '') + fmt(v) + ' m'));
+      tip.append(el('div', {}, sw, el('span', { className: 'tip-name', textContent: s.label + '：' }), (rel && v > 0 ? '+' : '') + fmt(v) + ' m'));
     });
     cursor.setAttribute('visibility', 'visible');
     tip.hidden = false;
@@ -496,7 +505,7 @@
         return el('td', {}, input);
       };
       const st = s.stats;
-      body.append(el('tr', {},
+      const tr = el('tr', {},
         el('td', {}, sw, s.label),
         range('from', s.from), range('to', s.to),
         el('td', { textContent: fmt(st.dist, 2) + ' km' }),
@@ -505,7 +514,11 @@
         el('td', { textContent: fmt(st.min) + ' m' }),
         el('td', { textContent: fmt(st.max) + ' m' }),
         el('td', { textContent: st.dist ? fmt(st.gain / st.dist) + ' m' : '–' })
-      ));
+      );
+      // 手機版把每一列排成卡片，欄位名稱由 CSS 從 data-label 顯示
+      const heads = $('stats').tHead.rows[0].cells;
+      Array.from(tr.cells).forEach((td, i) => { if (i) td.dataset.label = heads[i].textContent; });
+      body.append(tr);
     });
   }
 
@@ -537,6 +550,7 @@
   };
 
   $('chart').addEventListener('pointermove', onHover);
+  $('chart').addEventListener('pointerdown', onHover);
   $('chart').addEventListener('pointerleave', hideCursor);
   window.addEventListener('resize', renderChart);
 
@@ -558,6 +572,7 @@
     state.selected[keyOf('youluo', 0)] = {};
     state.selected[keyOf('xueshan', 0)] = {};
   }
+  allRoutes().forEach((r) => { if (segmentsOf(r).some((seg) => state.selected[seg.key])) openRoutes.add(r.id); });
   syncMode();
   render();
 })();

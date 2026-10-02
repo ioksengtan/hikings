@@ -34,6 +34,7 @@ h2 { margin: 0; font-size: 16px; }
 main {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
   gap: 16px;
   padding: 12px 24px 32px;
   align-items: start;
@@ -44,6 +45,7 @@ aside, section {
   border-radius: 10px;
   padding: 14px;
 }
+aside { grid-row: 1 / span 2; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .panel-foot { margin-top: 10px; }
 .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
@@ -63,7 +65,9 @@ aside, section {
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
 
 .route { border-top: 1px solid var(--line); padding: 8px 0; }
-.route-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.route-title { display: flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; user-select: none; }
+.caret { flex: none; width: 1em; font-style: normal; color: var(--muted); }
+.badge.on { color: var(--accent); border-color: var(--accent); }
 .route-title span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .badge {
   font-size: 11px; font-weight: 400; color: var(--muted);
@@ -99,7 +103,7 @@ aside, section {
 .seg button.on { background: var(--accent); color: var(--panel); }
 
 #chartWrap { position: relative; }
-#chart { display: block; width: 100%; height: 420px; }
+#chart { display: block; width: 100%; height: 420px; touch-action: pan-y; }
 #chart text { fill: var(--muted); font-size: 12px; }
 #chart .grid { stroke: var(--grid); }
 #chart .axis { stroke: var(--line); }
@@ -120,7 +124,7 @@ aside, section {
 #tooltip b { display: block; margin-bottom: 2px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
 
-.table-scroll { overflow-x: auto; margin-top: 10px; }
+.table-scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th, td { padding: 6px 8px; text-align: right; border-top: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--muted); font-weight: 500; border-top: 0; }
@@ -137,9 +141,42 @@ td input {
 [hidden] { display: none !important; }
 
 @media (max-width: 760px) {
-  main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 24px; }
-  header { padding: 16px 16px 4px; }
-  aside { order: 2; }
-  #chart { height: 320px; }
-  .day .icon { visibility: visible; }
+  header { padding: 12px 16px 0; }
+  h1 { font-size: 18px; }
+  header p { display: none; }
+  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; gap: 12px; padding: 10px 12px 24px; }
+  aside { order: 2; grid-row: auto; }
+  #statsCard { order: 3; }
+
+  /* 圖表固定在畫面上方，往下捲去勾路線時仍看得到 */
+  #chartCard { order: 1; position: sticky; top: 0; z-index: 5; padding: 10px; box-shadow: 0 6px 12px rgba(0, 0, 0, .18); }
+  #chart { height: 240px; }
+  .toolbar { margin-bottom: 4px; }
+  .tip-name { display: none; }
+  #tooltip { padding: 5px 8px; }
+
+  .route { padding: 4px 0; }
+  .route-title { padding: 8px 0; }
+  .day { padding: 8px 0 8px 4px; }
+  .day input[type="checkbox"] { width: 18px; height: 18px; flex: none; }
+  .day label { align-items: center; flex-wrap: wrap; }
+  .day .icon { visibility: visible; font-size: 18px; padding: 0 8px; }
+  .link { padding: 8px 4px; font-size: 14px; }
+  /* 字級不足 16px 時 iOS 會在點輸入框時自動放大頁面 */
+  .stop select, td input { font-size: 16px; }
+  .btn { padding: 8px 14px; }
+
+  /* 統計表改成一段一張卡片 */
+  .table-scroll { overflow: visible; }
+  #stats thead { display: none; }
+  #stats, #stats tbody { display: block; }
+  #stats tr { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+  #stats tr:first-child { border-top: 0; padding-top: 2px; }
+  #stats td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }
+  #stats td:first-child { grid-column: 1 / -1; font-weight: 600; }
+  #stats td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12px; }
+  #stats td input { width: 100%; text-align: left; padding: 4px 6px; }
+}
+@media (max-width: 760px) and (max-height: 559px) {
+  #chartCard { position: static; }
 }
