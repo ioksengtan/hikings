@@ -1,0 +1,402 @@
+(() => {
+  'use strict';
+
+  const COLORS = ['#2f7d5b', '#d9662b', '#3b6fd4', '#b8368f', '#8a7a12', '#12909c', '#c23b3b', '#6a55c7'];
+  const STORE_KEY = 'hikings.v1';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const $ = (id) => document.getElementById(id);
+
+  const bundled = window.BUNDLED_ROUTES || [];
+  const saved = load();
+  const state = {
+    user: saved.user || [],        // 使用者匯入的路線（存在 localStorage）
+    selected: saved.selected || {}, // key -> { from, to }，key = routeId|dayIndex
+    yMode: saved.yMode || 'abs'
+  };
+  let plotted = null; // 目前畫在圖上的資料，給滑鼠游標用
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+  }
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+    catch { alert('瀏覽器儲存空間不足，這次匯入的路線重新整理後會消失。可先按「匯出 routes.js」保存。'); }
+  }
+
+  const allRoutes = () => bundled.concat(state.user);
+  const keyOf = (routeId, dayIndex) => routeId + '|' + dayIndex;
+
+  // ---------- GPX ----------
+
+  function haversineKm(a, b) {
+    const R = 6371.0088, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  // 台灣時間的日期字串，用來把多日軌跡切成每天一段
+  function taipeiDate(ms) {
+    return new Date(ms + 8 * 3600e3).toISOString().slice(0, 10);
+  }
+
+  function parseGpx(text, fileName) {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('不是有效的 GPX');
+
+    const groups = []; // [{ label, pts }]
+    const segs = Array.from(doc.getElementsByTagName('trkseg'));
+    if (!segs.length) segs.push(...doc.getElementsByTagName('rte'));
+    let hasTime = true;
+
+    segs.forEach((seg, i) => {
+      const pts = [];
+      for (const el of seg.children) {
+        if (el.localName !== 'trkpt' && el.localName !== 'rtept') continue;
+        const child = (name) => Array.from(el.children).find((c) => c.localName === name);
+        const ele = parseFloat(child('ele')?.textContent);
+        const lat = parseFloat(el.getAttribute('lat')), lon = parseFloat(el.getAttribute('lon'));
+        if (!isFinite(ele) || !isFinite(lat) || !isFinite(lon)) continue;
+        const time = Date.parse(child('time')?.textContent || '');
+        if (!isFinite(time)) hasTime = false;
+        pts.push({ lat, lon, ele, time });
+      }
+      if (pts.length > 1) groups.push({ label: '第 ' + (i + 1) + ' 段', pts });
+    });
+    if (!groups.length) throw new Error('找不到含海拔的軌跡點');
+
+    let days = groups;
+    if (hasTime) {
+      const byDate = new Map();
+      groups.flatMap((g) => g.pts).sort((a, b) => a.time - b.time).forEach((p) => {
+        const d = taipeiDate(p.time);
+        if (!byDate.has(d)) byDate.set(d, []);
+        byDate.get(d).push(p);
+      });
+      days = Array.from(byDate, ([date, pts], i) => ({ label: 'D' + (i + 1) + ' ' + date, pts }))
+        .filter((d) => d.pts.length > 1);
+    }
+    if (days.length === 1) days[0].label = '全程';
+
+    const metaName = doc.querySelector('trk > name, metadata > name')?.textContent.trim();
+    return {
+      id: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name: metaName || fileName.replace(/\.gpx$/i, ''),
+      days: days.map((d) => ({ name: d.label, points: toProfile(d.pts) }))
+    };
+  }
+
+  // 經緯度點 -> [里程 km, 海拔 m]，並抽稀到大約每 20 m 一點
+  function toProfile(pts) {
+    const out = [[0, Math.round(pts[0].ele)]];
+    let dist = 0, lastKept = 0;
+    for (let i = 1; i < pts.length; i++) {
+      dist += haversineKm(pts[i - 1], pts[i]);
+      if (dist - lastKept >= 0.02 || i === pts.length - 1) {
+        out.push([+dist.toFixed(3), Math.round(pts[i].ele)]);
+        lastKept = dist;
+      }
+    }
+    return out;
+  }
+
+  async function importFiles(files) {
+    const errors = [];
+    for (const file of files) {
+      try {
+        const route = parseGpx(await file.text(), file.name);
+        state.user.push(route);
+        route.days.forEach((_, i) => { state.selected[keyOf(route.id, i)] = {}; });
+      } catch (e) {
+        errors.push(file.name + '：' + e.message);
+      }
+    }
+    save();
+    render();
+    if (errors.length) alert('以下檔案無法匯入：\n' + errors.join('\n'));
+  }
+
+  // ---------- 計算 ----------
+
+  function interp(points, km) {
+    if (km <= points[0][0]) return points[0][1];
+    for (let i = 1; i < points.length; i++) {
+      if (km <= points[i][0]) {
+        const [x0, y0] = points[i - 1], [x1, y1] = points[i];
+        return x1 === x0 ? y1 : y0 + (y1 - y0) * (km - x0) / (x1 - x0);
+      }
+    }
+    return points[points.length - 1][1];
+  }
+
+  // 取出 [from, to] 這一段，里程重新從 0 起算
+  function slice(points, from, to) {
+    const nameAt = (km) => (points.find((p) => p[0] === km) || [])[2];
+    const out = [[0, interp(points, from), nameAt(from)]];
+    for (const [x, y, name] of points) if (x > from && x < to) out.push([x - from, y, name]);
+    out.push([to - from, interp(points, to), nameAt(to)]);
+    return out;
+  }
+
+  // 3 m 以下的起伏視為 GPS 雜訊，不計入爬升/下降
+  function stats(points) {
+    let gain = 0, loss = 0, ref = points[0][1], min = ref, max = ref;
+    for (const [, y] of points) {
+      min = Math.min(min, y); max = Math.max(max, y);
+      const d = y - ref;
+      if (Math.abs(d) >= 3) { if (d > 0) gain += d; else loss -= d; ref = y; }
+    }
+    return { dist: points[points.length - 1][0], gain, loss, min, max };
+  }
+
+  function buildSeries() {
+    const series = [];
+    allRoutes().forEach((route) => route.days.forEach((day, i) => {
+      const key = keyOf(route.id, i);
+      const sel = state.selected[key];
+      if (!sel || day.points.length < 2) return;
+      const total = day.points[day.points.length - 1][0];
+      let from = Math.min(Math.max(+sel.from || 0, 0), total);
+      let to = sel.to == null || sel.to === '' ? total : Math.min(Math.max(+sel.to, 0), total);
+      if (!(to > from)) { from = 0; to = total; }
+      const points = slice(day.points, from, to);
+      series.push({ key, label: route.name + '｜' + day.name, total, from, to, points, stats: stats(points) });
+    }));
+    series.forEach((s, i) => { s.color = COLORS[i % COLORS.length]; });
+    return series;
+  }
+
+  // ---------- 畫面 ----------
+
+  function el(tag, props, ...children) {
+    const node = Object.assign(document.createElement(tag), props);
+    node.append(...children);
+    return node;
+  }
+  function svg(tag, attrs, text) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const k in attrs) node.setAttribute(k, attrs[k]);
+    if (text != null) node.textContent = text;
+    return node;
+  }
+  const fmt = (n, digits = 0) => n.toLocaleString('zh-TW', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+  function renderList() {
+    const list = $('routeList');
+    list.replaceChildren();
+    allRoutes().forEach((route) => {
+      const isUser = state.user.includes(route);
+      const title = el('div', { className: 'route-title' }, el('span', { textContent: route.name }));
+      if (route.approx) title.append(el('em', { className: 'badge', textContent: '概略', title: '以地標的里程與海拔連成，非實測軌跡' }));
+      if (isUser) {
+        title.append(
+          el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: () => rename(route) }),
+          el('button', { className: 'icon', title: '刪除', textContent: '✕', onclick: () => removeRoute(route) })
+        );
+      }
+      const box = el('div', { className: 'route' }, title);
+      route.days.forEach((day, i) => {
+        const key = keyOf(route.id, i);
+        const check = el('input', { type: 'checkbox', checked: !!state.selected[key] });
+        check.onchange = () => {
+          if (check.checked) state.selected[key] = {}; else delete state.selected[key];
+          save(); renderChart();
+        };
+        const s = stats(day.points);
+        const row = el('div', { className: 'day' },
+          el('label', {}, check, el('span', { textContent: day.name }),
+            el('small', { textContent: fmt(s.dist, 1) + ' km ↑' + fmt(s.gain) }))
+        );
+        if (isUser) row.append(el('button', { className: 'icon', title: '重新命名', textContent: '✎', onclick: () => rename(day) }));
+        box.append(row);
+      });
+      list.append(box);
+    });
+  }
+
+  function rename(item) {
+    const name = prompt('名稱', item.name);
+    if (name && name.trim()) { item.name = name.trim(); save(); render(); }
+  }
+
+  function removeRoute(route) {
+    if (!confirm('刪除「' + route.name + '」？')) return;
+    state.user = state.user.filter((r) => r !== route);
+    Object.keys(state.selected).forEach((k) => { if (k.startsWith(route.id + '|')) delete state.selected[k]; });
+    save(); render();
+  }
+
+  function niceStep(span, target) {
+    const raw = span / target, pow = 10 ** Math.floor(Math.log10(raw));
+    const f = raw / pow;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * pow;
+  }
+
+  function renderChart() {
+    const series = buildSeries();
+    const rel = state.yMode === 'rel';
+    series.forEach((s) => {
+      const base = rel ? s.points[0][1] : 0;
+      s.plot = s.points.map(([x, y, name]) => [x, y - base, name]);
+    });
+
+    const chart = $('chart');
+    chart.replaceChildren();
+    $('empty').hidden = series.length > 0;
+    $('tooltip').hidden = true;
+    renderTable(series);
+    plotted = null;
+    if (!series.length) return;
+
+    const W = chart.clientWidth || 800, H = chart.clientHeight || 420;
+    const m = { l: 56, r: 16, t: 14, b: 38 };
+    chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const xMax = Math.max(...series.map((s) => s.stats.dist));
+    const ys = series.flatMap((s) => s.plot.map((p) => p[1]));
+    const yStep = niceStep(Math.max(Math.max(...ys) - Math.min(...ys), 50), 6);
+    const y0 = Math.floor(Math.min(...ys) / yStep) * yStep;
+    const y1 = Math.ceil(Math.max(...ys) / yStep) * yStep || yStep;
+    const xStep = niceStep(xMax, Math.max(4, Math.floor(W / 110)));
+
+    const sx = (km) => m.l + km / xMax * (W - m.l - m.r);
+    const sy = (v) => H - m.b - (v - y0) / (y1 - y0) * (H - m.t - m.b);
+
+    for (let v = y0; v <= y1 + 1e-9; v += yStep) {
+      chart.append(svg('line', { class: 'grid', x1: m.l, x2: W - m.r, y1: sy(v), y2: sy(v) }));
+      chart.append(svg('text', { x: m.l - 8, y: sy(v) + 4, 'text-anchor': 'end' }, fmt(v)));
+    }
+    for (let k = 0; k <= xMax + 1e-9; k += xStep) {
+      chart.append(svg('line', { class: 'grid', x1: sx(k), x2: sx(k), y1: m.t, y2: H - m.b }));
+      chart.append(svg('text', { x: sx(k), y: H - m.b + 16, 'text-anchor': 'middle' }, fmt(k, xStep < 1 ? 1 : 0)));
+    }
+    chart.append(svg('line', { class: 'axis', x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }));
+    chart.append(svg('text', { x: W - m.r, y: H - 6, 'text-anchor': 'end' }, '里程 (km)'));
+    chart.append(svg('text', { x: 4, y: m.t + 2, 'dominant-baseline': 'hanging' }, rel ? '相對起點 (m)' : '海拔 (m)'));
+
+    series.forEach((s) => {
+      const d = s.plot.map(([x, y], i) => (i ? 'L' : 'M') + sx(x).toFixed(1) + ' ' + sy(y).toFixed(1)).join('');
+      chart.append(svg('path', { class: 'series', d, stroke: s.color }));
+      // 有名稱的點是地標，滑鼠停在圓點上會顯示名稱
+      s.plot.filter((p) => p[2]).forEach(([x, y, name]) => {
+        const dot = svg('circle', { class: 'mark', cx: sx(x), cy: sy(y), r: 3.5, stroke: s.color });
+        dot.append(svg('title', {}, name + '（' + fmt(x, 1) + ' km）'));
+        chart.append(dot);
+      });
+    });
+
+    const cursor = svg('g', { visibility: 'hidden' });
+    cursor.append(svg('line', { class: 'cursor', y1: m.t, y2: H - m.b }));
+    series.forEach((s) => cursor.append(svg('circle', { r: 4, fill: s.color })));
+    chart.append(cursor);
+
+    plotted = { series, sx, sy, xMax, m, W, cursor, rel };
+  }
+
+  function onHover(ev) {
+    if (!plotted) return;
+    const { series, sx, sy, xMax, m, W, cursor, rel } = plotted;
+    const rect = $('chart').getBoundingClientRect();
+    const px = (ev.clientX - rect.left) * W / rect.width;
+    const km = Math.min(Math.max((px - m.l) / (W - m.l - m.r) * xMax, 0), xMax);
+
+    const line = cursor.firstChild;
+    line.setAttribute('x1', sx(km)); line.setAttribute('x2', sx(km));
+    const tip = $('tooltip');
+    tip.replaceChildren(el('b', { textContent: fmt(km, 2) + ' km' }));
+    series.forEach((s, i) => {
+      const dot = cursor.children[i + 1];
+      const inRange = km <= s.stats.dist;
+      dot.setAttribute('visibility', inRange ? 'inherit' : 'hidden');
+      if (!inRange) return;
+      const v = interp(s.plot, km);
+      dot.setAttribute('cx', sx(km)); dot.setAttribute('cy', sy(v));
+      const sw = el('span', { className: 'sw' });
+      sw.style.background = s.color;
+      tip.append(el('div', {}, sw, s.label + '：' + (rel && v > 0 ? '+' : '') + fmt(v) + ' m'));
+    });
+    cursor.setAttribute('visibility', 'visible');
+    tip.hidden = false;
+    const x = sx(km) * rect.width / W;
+    tip.style.left = (x + tip.offsetWidth + 16 > rect.width ? x - tip.offsetWidth - 12 : x + 12) + 'px';
+  }
+
+  function hideCursor() {
+    if (plotted) plotted.cursor.setAttribute('visibility', 'hidden');
+    $('tooltip').hidden = true;
+  }
+
+  function renderTable(series) {
+    const body = $('stats').tBodies[0];
+    body.replaceChildren();
+    series.forEach((s) => {
+      const sw = el('span', { className: 'sw' });
+      sw.style.background = s.color;
+      const range = (field, value) => {
+        const input = el('input', { type: 'number', min: 0, max: +s.total.toFixed(2), step: 0.1, value: +value.toFixed(2) });
+        input.onchange = () => { state.selected[s.key][field] = input.value; save(); renderChart(); };
+        return el('td', {}, input);
+      };
+      const st = s.stats;
+      body.append(el('tr', {},
+        el('td', {}, sw, s.label),
+        range('from', s.from), range('to', s.to),
+        el('td', { textContent: fmt(st.dist, 2) + ' km' }),
+        el('td', { textContent: '+' + fmt(st.gain) + ' m' }),
+        el('td', { textContent: '−' + fmt(st.loss) + ' m' }),
+        el('td', { textContent: fmt(st.min) + ' m' }),
+        el('td', { textContent: fmt(st.max) + ' m' }),
+        el('td', { textContent: st.dist ? fmt(st.gain / st.dist) + ' m' : '–' })
+      ));
+    });
+  }
+
+  function render() { renderList(); renderChart(); }
+
+  // ---------- 事件 ----------
+
+  $('gpxInput').onchange = (e) => { importFiles(Array.from(e.target.files)); e.target.value = ''; };
+
+  $('yMode').onclick = (e) => {
+    const mode = e.target.dataset.mode;
+    if (!mode) return;
+    state.yMode = mode;
+    save(); syncMode(); renderChart();
+  };
+  function syncMode() {
+    for (const b of $('yMode').children) b.classList.toggle('on', b.dataset.mode === state.yMode);
+  }
+
+  $('exportBtn').onclick = () => {
+    const routes = allRoutes();
+    const js = '// 網站內建路線。points 為 [累積里程 km, 海拔 m, 地標名稱(可省略)]。\nwindow.BUNDLED_ROUTES = ' + JSON.stringify(routes) + ';\n';
+    const a = el('a', { href: URL.createObjectURL(new Blob([js], { type: 'text/javascript' })), download: 'routes.js' });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  $('chart').addEventListener('pointermove', onHover);
+  $('chart').addEventListener('pointerleave', hideCursor);
+  window.addEventListener('resize', renderChart);
+
+  let dragDepth = 0;
+  const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+  window.addEventListener('dragenter', (e) => { if (hasFiles(e)) { dragDepth++; $('dropMask').hidden = false; } });
+  window.addEventListener('dragleave', (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; $('dropMask').hidden = true; } });
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0; $('dropMask').hidden = true;
+    importFiles(Array.from(e.dataTransfer.files).filter((f) => /\.gpx$/i.test(f.name)));
+  });
+
+  // 第一次開啟時，預設勾選示範的兩段方便看到效果
+  if (!saved.selected) {
+    state.selected[keyOf('jiemaosi', 1)] = {};
+    state.selected[keyOf('youluo', 0)] = {};
+    state.selected[keyOf('xueshan', 0)] = {};
+  }
+  syncMode();
+  render();
+})();

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>健行路線比較｜海拔 vs 里程</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>健行路線比較</h1>
+    <p>勾選任意路線的任一天，疊在同一張「海拔 vs 里程」圖上比較。</p>
+  </header>
+
+  <main>
+    <aside>
+      <div class="panel-head">
+        <h2>路線</h2>
+        <label class="btn primary">匯入 GPX
+          <input id="gpxInput" type="file" accept=".gpx,application/gpx+xml" multiple hidden>
+        </label>
+      </div>
+      <div id="routeList"></div>
+      <p class="hint">可一次選多個 GPX，或直接把檔案拖進頁面。多日行程會依紀錄日期自動切成 D1、D2…</p>
+      <div class="panel-foot">
+        <button id="exportBtn" class="btn" title="下載 routes.js，放到 data/ 資料夾並 commit，就會成為網站內建路線">匯出 routes.js</button>
+      </div>
+    </aside>
+
+    <section>
+      <div class="toolbar">
+        <span>縱軸</span>
+        <div class="seg" id="yMode">
+          <button data-mode="abs" class="on">海拔</button>
+          <button data-mode="rel">相對起點</button>
+        </div>
+      </div>
+      <div id="chartWrap">
+        <svg id="chart" role="img" aria-label="海拔對里程折線圖"></svg>
+        <div id="tooltip" hidden></div>
+        <div id="empty">在左側勾選路線段落開始比較</div>
+      </div>
+      <div class="table-scroll">
+        <table id="stats">
+          <thead>
+            <tr>
+              <th>段落</th>
+              <th title="只取這一天當中的某一段來比較">起點 km</th>
+              <th>終點 km</th>
+              <th>里程</th>
+              <th>總爬升</th>
+              <th>總下降</th>
+              <th>最低</th>
+              <th>最高</th>
+              <th title="總爬升 ÷ 里程">爬升/km</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="dropMask" hidden>放開以匯入 GPX</div>
+
+  <script src="data/routes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
