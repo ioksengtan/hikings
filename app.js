@@ -236,7 +236,14 @@
       const points = slice(day.points, from, to);
       series.push({ key, label: route.name + '｜' + day.name, total, from, to, points, stats: stats(points) });
     }));
-    series.forEach((s, i) => { s.color = COLORS[i % COLORS.length]; });
+    // 顏色在勾選時就固定下來，之後再加別的線也不會變；新線拿目前最少人用的顏色
+    const used = COLORS.map(() => 0);
+    series.forEach((s) => { const c = state.selected[s.key].color; if (c != null) used[c]++; });
+    series.forEach((s) => {
+      const sel = state.selected[s.key];
+      if (sel.color == null) { sel.color = used.indexOf(Math.min(...used)); used[sel.color]++; save(); }
+      s.color = COLORS[sel.color];
+    });
     return series;
   }
 
